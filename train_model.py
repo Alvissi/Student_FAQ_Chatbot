@@ -4,7 +4,9 @@ train_model.py
 This file contains the machine learning pipeline for the Student FAQ Chatbot.
 
 What it does, in plain terms:
-1. Loads the labeled training questions from faq_training_data.csv.
+1. Loads the labeled training questions from faq_training_data.csv, plus every
+   wording (main question + alternative phrasings) from faq_knowledge_base.csv,
+   so the classifier also learns the vocabulary of the dropdown questions.
 2. Converts each question's text into numbers using TF-IDF
    (this measures how important each word is in a question).
 3. Trains a Multinomial Naive Bayes classifier to learn which category
@@ -17,12 +19,19 @@ This module is imported by both app.py (the web app) and evaluate_model.py
 everywhere -- there is only one place where the model is defined.
 """
 
+import hashlib
 import os
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
 import joblib
+
+from faq_engine import (
+    KNOWLEDGE_BASE_PATH,
+    knowledge_base_training_rows,
+    load_knowledge_base,
+)
 
 # A fixed random seed makes results reproducible -- re-running training
 # or evaluation will always split/shuffle data the same way.
@@ -35,13 +44,24 @@ TRAINING_DATA_PATH = os.path.join(BASE_DIR, "faq_training_data.csv")
 MODEL_PATH = os.path.join(BASE_DIR, "model.pkl")
 
 
-def load_training_data(path: str = TRAINING_DATA_PATH) -> pd.DataFrame:
+def load_training_data(
+    path: str = TRAINING_DATA_PATH,
+    include_knowledge_base: bool = True,
+    kb_path: str = KNOWLEDGE_BASE_PATH,
+) -> pd.DataFrame:
     """
-    Loads and lightly validates the labeled training dataset.
+    Loads and lightly validates the labeled dataset used by the classifier.
+
+    Sources:
+      1. faq_training_data.csv        (the original labeled questions)
+      2. faq_knowledge_base.csv       (each FAQ's main question and alternative
+                                       phrasings, labeled with the FAQ's category)
 
     Returns a DataFrame with columns: 'question', 'category'.
-    Rows with missing or empty questions/categories are dropped, and
-    extra whitespace is trimmed, so a messy CSV doesn't break training.
+    Rows with missing or empty questions/categories are dropped, extra
+    whitespace is trimmed, and exact duplicates (ignoring upper/lower case) are
+    removed. If the same question text is labeled with two different
+    categories, a ValueError is raised instead of silently picking one.
     """
     df = pd.read_csv(path)
 
@@ -52,15 +72,35 @@ def load_training_data(path: str = TRAINING_DATA_PATH) -> pd.DataFrame:
             f"Training data must contain columns {expected_columns}, "
             f"but found {set(df.columns)}"
         )
+    df = df[["question", "category"]]
+
+    if include_knowledge_base and os.path.exists(kb_path):
+        kb_rows = knowledge_base_training_rows(load_knowledge_base(kb_path))
+        df = pd.concat([df, kb_rows], ignore_index=True)
 
     # Clean up whitespace and drop any rows with missing values.
+    df = df.dropna(subset=["question", "category"])
     df["question"] = df["question"].astype(str).str.strip()
     df["category"] = df["category"].astype(str).str.strip()
     df = df[(df["question"] != "") & (df["category"] != "")]
-    df = df.dropna(subset=["question", "category"])
-    df = df.reset_index(drop=True)
+
+    # Remove exact duplicates, and refuse contradictory labels.
+    key = df["question"].str.lower()
+    labels_per_question = df.groupby(key)["category"].nunique()
+    conflicts = labels_per_question[labels_per_question > 1].index.tolist()
+    if conflicts:
+        raise ValueError(
+            f"These questions appear with more than one category: {conflicts}"
+        )
+    df = df.loc[~key.duplicated()].reset_index(drop=True)
 
     return df
+
+
+def data_fingerprint(df: pd.DataFrame) -> str:
+    """Short hash of the training data, used to detect an out-of-date model.pkl."""
+    joined = "\n".join(sorted(f"{q}\t{c}" for q, c in zip(df["question"], df["category"])))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 def build_pipeline() -> Pipeline:
@@ -109,6 +149,10 @@ def train_and_save_model(
     pipeline = build_pipeline()
     pipeline.fit(df["question"], df["category"])
 
+    # Remember which data this model was trained on, so load_or_train_model()
+    # can tell when model.pkl is out of date.
+    pipeline.data_fingerprint_ = data_fingerprint(df)
+
     joblib.dump(pipeline, model_path)
     print(f"Model trained on {len(df)} examples and saved to: {model_path}")
 
@@ -119,14 +163,18 @@ def load_or_train_model(
     data_path: str = TRAINING_DATA_PATH, model_path: str = MODEL_PATH
 ) -> Pipeline:
     """
-    Loads a previously saved model if one exists; otherwise trains a new
-    one from the CSV dataset and saves it. This is what the Streamlit app
-    calls on startup, so the model is always available -- including on a
-    fresh deployment where model.pkl doesn't exist yet.
+    Loads a previously saved model if one exists AND it was trained on the
+    current data; otherwise trains a new one and saves it. This is what the
+    Streamlit app calls on startup, so the model is always available --
+    including on a fresh deployment where model.pkl doesn't exist yet -- and a
+    stale model.pkl (from before the CSV files changed) is never used.
     """
     if os.path.exists(model_path):
         try:
-            return joblib.load(model_path)
+            model = joblib.load(model_path)
+            current = data_fingerprint(load_training_data(data_path))
+            if getattr(model, "data_fingerprint_", None) == current:
+                return model
         except Exception:
             # If the saved file is corrupted or incompatible, retrain instead
             # of crashing the app.

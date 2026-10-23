@@ -21,10 +21,19 @@ What this script does:
    hardcoded or invented).
 6. Measures average prediction response time as a simple performance metric.
 
+7. (Part 2) Evaluates the FULL answer pipeline -- classifier + FAQ matching --
+   on separate question sets that are never used for training or in the FAQ
+   knowledge base: faq_dev_questions.csv (used once to choose thresholds) and
+   faq_test_questions.csv (used only for reporting). This part reports
+   CLASSIFICATION accuracy and FAQ ANSWER RELEVANCE separately, because they
+   measure different things.
+
 Run with:  python evaluate_model.py
 """
 
+import os
 import time
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
@@ -36,7 +45,15 @@ from sklearn.metrics import (
     classification_report,
 )
 
-from train_model import load_training_data, build_pipeline, RANDOM_SEED
+from faq_engine import (
+    AMBIGUITY_MARGIN,
+    CLASSIFIER_CONFIDENCE_THRESHOLD,
+    RETRIEVAL_SCORE_THRESHOLD,
+    FAQMatcher,
+    answer_question,
+    load_knowledge_base,
+)
+from train_model import BASE_DIR, load_training_data, build_pipeline, RANDOM_SEED
 
 TEST_SIZE = 0.20  # ~20% of the data held out for testing
 
@@ -137,5 +154,133 @@ def run_evaluation():
     }
 
 
+DEV_QUESTIONS_PATH = os.path.join(BASE_DIR, "faq_dev_questions.csv")
+TEST_QUESTIONS_PATH = os.path.join(BASE_DIR, "faq_test_questions.csv")
+
+
+def _evaluate_question_set(name, path, classifier, matcher, kb, seen_wordings):
+    """
+    Runs the full pipeline on a labeled question set.
+    expected_faq_id is a knowledge-base FAQ id for in-scope questions, or NONE
+    for questions the bot should NOT answer (it should fall back instead).
+    """
+    qs = pd.read_csv(path)
+    faq_category = dict(zip(kb["faq_id"], kb["category"]))
+
+    overlap = [q for q in qs["question"] if q.strip().lower() in seen_wordings]
+    print(f"\n{name}  ({len(qs)} questions, from {os.path.basename(path)})")
+    if overlap:
+        print(f"  WARNING: {len(overlap)} question(s) also appear in the training "
+              f"data / knowledge base, so this set is NOT independent: {overlap}")
+
+    in_scope = out_scope = 0
+    cat_correct = faq_correct = wrong_answer = false_fallback = 0
+    faq_correct_given_cat = cat_correct_total = 0
+    oos_rejected = 0
+    mistakes = []
+
+    for question, expected in zip(qs["question"], qs["expected_faq_id"]):
+        result = answer_question(question, classifier, matcher)
+
+        if expected == "NONE":
+            out_scope += 1
+            if not result.answered:
+                oos_rejected += 1
+            else:
+                mistakes.append((question, "should fall back", result.faq_id,
+                                 result.classifier_confidence, result.match_score))
+            continue
+
+        in_scope += 1
+        # Classification accuracy: raw top category, ignoring the fallback rule.
+        raw_category = classifier.classes_[
+            int(np.argmax(classifier.predict_proba([question])[0]))
+        ]
+        category_ok = raw_category == faq_category[expected]
+        cat_correct += category_ok
+        cat_correct_total += category_ok
+
+        if result.answered and result.faq_id == expected:
+            faq_correct += 1
+            faq_correct_given_cat += category_ok
+        elif result.answered:
+            wrong_answer += 1
+            mistakes.append((question, expected, result.faq_id,
+                             result.classifier_confidence, result.match_score))
+        else:
+            false_fallback += 1
+            mistakes.append((question, expected, f"({result.status})",
+                             result.classifier_confidence, result.match_score))
+
+    print(f"  In-scope questions: {in_scope}")
+    print(f"    Category classification accuracy:    {cat_correct}/{in_scope} = {cat_correct / in_scope:.1%}")
+    print(f"    Correct FAQ answer returned:         {faq_correct}/{in_scope} = {faq_correct / in_scope:.1%}")
+    print(f"    Wrong FAQ answer returned:           {wrong_answer}/{in_scope} = {wrong_answer / in_scope:.1%}")
+    print(f"    Fell back / asked to clarify:        {false_fallback}/{in_scope} = {false_fallback / in_scope:.1%}")
+    if cat_correct_total:
+        print(f"    Correct FAQ, given correct category: {faq_correct_given_cat}/{cat_correct_total} = {faq_correct_given_cat / cat_correct_total:.1%}")
+    if out_scope:
+        print(f"  Out-of-scope questions: {out_scope}")
+        print(f"    Correctly refused (fallback):        {oos_rejected}/{out_scope} = {oos_rejected / out_scope:.1%}")
+    if mistakes:
+        print("  Questions that did not go as expected:")
+        for q, exp, got, conf, score in mistakes:
+            print(f"    - {q!r}\n        expected {exp}, got {got} "
+                  f"(classifier conf {conf:.2f}, match score {score:.2f})")
+
+
+def run_faq_pipeline_evaluation():
+    print("\n" + "=" * 70)
+    print("PART 2: FULL ANSWER PIPELINE (classifier + FAQ matching)")
+    print("=" * 70)
+    print(
+        "Classification accuracy (did we pick the right CATEGORY?) is different\n"
+        "from answer relevance (did we return the right FAQ ANSWER?). The ML\n"
+        "classifier only predicts the category; the FAQ-matching stage picks the\n"
+        "specific answer inside it, so both are reported below."
+    )
+    print(f"\nSettings: classifier confidence >= {CLASSIFIER_CONFIDENCE_THRESHOLD}, "
+          f"match score >= {RETRIEVAL_SCORE_THRESHOLD}, ambiguity margin {AMBIGUITY_MARGIN}")
+
+    kb = load_knowledge_base()
+    df = load_training_data()
+    # Same model the app serves: trained on the full labeled dataset. The
+    # question sets below are separate files and are never part of it.
+    classifier = build_pipeline()
+    classifier.fit(df["question"], df["category"])
+    matcher = FAQMatcher(kb)
+
+    seen = set(df["question"].str.strip().str.lower())
+
+    # A. Predefined (dropdown) questions: each should return its OWN answer.
+    own = sum(
+        answer_question(q, classifier, matcher).faq_id == fid
+        for fid, q in zip(kb["faq_id"], kb["question"])
+    )
+    print(f"\nPredefined dropdown questions: {own}/{len(kb)} returned their own FAQ answer")
+    print("  (These wordings are in the knowledge base, so this is a sanity check,\n"
+          "   not a measure of generalization.)")
+
+    # B. Custom questions the system has never seen.
+    _evaluate_question_set("DEV SET (used once to choose the thresholds - optimistic)",
+                           DEV_QUESTIONS_PATH, classifier, matcher, kb, seen)
+    _evaluate_question_set("TEST SET (never used to tune anything)",
+                           TEST_QUESTIONS_PATH, classifier, matcher, kb, seen)
+
+    print("\n" + "-" * 70)
+    print(
+        "NOTE: These question sets are small (30 and 60 questions) and written by\n"
+        "the developer, so the percentages above carry wide uncertainty and should\n"
+        "not be presented as real-world performance. The Part 1 accuracy above is\n"
+        "also optimistic: several rewordings of the same FAQ can land on both\n"
+        "sides of the random 80/20 split, so the classifier sees near-duplicates\n"
+        "of its test questions. The Part 2 test set (questions written separately,\n"
+        "never used in training or in the knowledge base) is the more realistic\n"
+        "estimate."
+    )
+    print("=" * 70)
+
+
 if __name__ == "__main__":
     run_evaluation()
+    run_faq_pipeline_evaluation()

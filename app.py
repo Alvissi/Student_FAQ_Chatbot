@@ -3,56 +3,47 @@ app.py
 ------
 Student FAQ Chatbot -- Streamlit web application.
 
-This is the user-facing part of the research project. It loads a trained
-machine learning model (TF-IDF + Multinomial Naive Bayes), lets a student
-type a question, classifies the question's intent into one of three
-categories, and returns a predefined sample answer for that category.
+This is the user-facing part of the research project. A student can either
+pick a predefined question from a searchable dropdown or type their own
+question. BOTH routes go through exactly the same pipeline (faq_engine.py):
+
+  1. A trained machine learning model (TF-IDF + Multinomial Naive Bayes)
+     classifies the question into one of three categories.
+  2. TF-IDF + cosine similarity finds the most relevant FAQ entry inside that
+     category, and that entry's own predefined answer is returned.
+  3. If either step is not confident enough, a fallback message is shown.
 
 Run locally with:  streamlit run app.py
 """
 
-import time
-import pandas as pd
+import html
+
 import streamlit as st
 
-from train_model import load_or_train_model, BASE_DIR
-import os
+from faq_engine import (
+    CATEGORY_ORDER,
+    FAQMatcher,
+    answer_question,
+    get_category_questions,
+    load_knowledge_base,
+)
+from train_model import load_or_train_model
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
-# If the model's top predicted probability is below this value, we treat the
-# question as "not confidently recognized" and show the fallback message
-# instead of possibly giving a wrong answer. This value was chosen by
-# checking that clearly unrelated/off-topic questions in testing scored
-# around 0.33 confidence, while genuine in-scope questions (even reworded
-# ones) scored 0.43 and above. See README.md for details.
-CONFIDENCE_THRESHOLD = 0.40
+# The confidence thresholds and fallback message live in faq_engine.py, so the
+# app and the evaluation script always use identical settings.
 
-FALLBACK_MESSAGE = (
-    "I'm sorry, I couldn't identify your question. Please ask about "
-    "enrollment, school requirements, or class schedules."
-)
+# The dropdown's QUESTIONS are never hardcoded here -- they come from
+# faq_knowledge_base.csv (see get_category_questions in faq_engine.py), so the
+# dropdown can never show a question that has no answer.
 
-ANSWERS_PATH = os.path.join(BASE_DIR, "faq_answers.csv")
-
-EXAMPLE_QUESTIONS = {
-    "Enrollment": [
-        "How do I enroll?",
-        "What are the enrollment dates?",
-        "How do returning students enroll?",
-    ],
-    "School Requirements": [
-        "What documents should I submit?",
-        "What are the school requirements?",
-        "Do I need a good moral certificate?",
-    ],
-    "Class Schedules": [
-        "Where can I see my class schedule?",
-        "How do I check my subjects and schedule?",
-        "Where do I find the room assignment for my class?",
-    ],
+CATEGORY_DESCRIPTIONS = {
+    "Enrollment": "Questions about enrolling, registering, or re-enrolling for classes.",
+    "School Requirements": "Questions about documents and papers needed for enrollment.",
+    "Class Schedules": "Questions about viewing or checking your class schedule.",
 }
 
 # ---------------------------------------------------------------------------
@@ -131,62 +122,43 @@ def get_model():
     return load_or_train_model()
 
 
-@st.cache_data(show_spinner=False)
-def get_answers():
-    df = pd.read_csv(ANSWERS_PATH)
-    return dict(zip(df["category"], df["answer"]))
+@st.cache_resource(show_spinner=False)
+def get_matcher():
+    return FAQMatcher(load_knowledge_base())
 
 
 try:
     model = get_model()
-    answers = get_answers()
+    matcher = get_matcher()
     load_error = None
 except Exception as exc:  # pragma: no cover - defensive UI guard
     model = None
-    answers = {}
+    matcher = None
     load_error = str(exc)
 
 
-def classify_question(question: str):
-    """
-    Runs the trained ML pipeline on a single question and returns
-    (predicted_category, confidence, response_time_seconds).
-
-    If the top confidence is below CONFIDENCE_THRESHOLD, the category is
-    returned as None so the caller shows the fallback message instead.
-    """
-    start_time = time.perf_counter()
-    probabilities = model.predict_proba([question])[0]
-    classes = model.classes_
-    best_index = probabilities.argmax()
-    confidence = probabilities[best_index]
-    predicted_category = classes[best_index]
-    elapsed = time.perf_counter() - start_time
-
-    if confidence < CONFIDENCE_THRESHOLD:
-        return None, confidence, elapsed
-    return predicted_category, confidence, elapsed
-
-
 def get_bot_reply(question: str) -> str:
-    """Handles empty/invalid input and returns the final text to display."""
+    """
+    Single answer pipeline shared by the dropdown and the free-text box:
+    classify the category, find the best FAQ in it, return that FAQ's answer.
+    """
     question = (question or "").strip()
 
     if not question:
         return "Please type a question so I can try to help you."
 
-    if model is None:
+    if model is None or matcher is None:
         return (
             "Sorry, the chatbot's model could not be loaded right now. "
             "Please try again later."
         )
 
-    category, confidence, _ = classify_question(question)
+    return answer_question(question, model, matcher).reply_text
 
-    if category is None:
-        return FALLBACK_MESSAGE
 
-    return answers.get(category, FALLBACK_MESSAGE)
+def to_bubble_html(text: str) -> str:
+    """Escapes text for safe display inside a chat bubble and keeps line breaks."""
+    return html.escape(text).replace("\n", "<br>")
 
 
 # ---------------------------------------------------------------------------
@@ -222,24 +194,86 @@ if load_error:
     st.error(f"The chatbot model failed to load: {load_error}")
 
 # ---------------------------------------------------------------------------
-# Supported categories with clickable example questions
+# Supported categories + one searchable dropdown of predefined questions
 # ---------------------------------------------------------------------------
 
 st.markdown("#### Supported categories")
-cat_cols = st.columns(3)
-category_names = list(EXAMPLE_QUESTIONS.keys())
 
-for col, category in zip(cat_cols, category_names):
+if "active_category" not in st.session_state:
+    st.session_state.active_category = CATEGORY_ORDER[0]
+
+# A counter baked into the dropdown's widget key. Bumping it creates a brand-new
+# (unselected) dropdown on the next run, which is how the dropdown is cleared
+# after "Ask Question" without touching an already-instantiated widget's state
+# directly (which Streamlit does not allow).
+if "dropdown_reset_counter" not in st.session_state:
+    st.session_state.dropdown_reset_counter = 0
+
+category_questions = (
+    get_category_questions(matcher.kb) if matcher is not None else {}
+)
+
+cat_cols = st.columns(3)
+for col, category in zip(cat_cols, CATEGORY_ORDER):
     with col:
-        st.markdown(
-            f'<div class="category-card"><strong>{category}</strong></div>',
-            unsafe_allow_html=True,
-        )
-        with st.popover(f"Examples", use_container_width=True):
-            st.caption(f"Try one of these {category.lower()} questions:")
-            for example in EXAMPLE_QUESTIONS[category]:
-                if st.button(example, key=f"example_{category}_{example}"):
-                    st.session_state.pending_question = example
+        is_active = category == st.session_state.active_category
+        if st.button(
+            category,
+            key=f"cat_btn_{category}",
+            width="stretch",
+            type="primary" if is_active else "secondary",
+        ):
+            if not is_active:
+                st.session_state.active_category = category
+                st.rerun()
+
+active_category = st.session_state.active_category
+
+st.markdown(
+    f'<div class="category-card"><strong>{active_category}</strong><br>'
+    f'<span style="color:#6B7280; font-size:0.9rem;">'
+    f"{CATEGORY_DESCRIPTIONS.get(active_category, '')}</span></div>",
+    unsafe_allow_html=True,
+)
+
+dropdown_options = category_questions.get(active_category, [])
+# The category AND the reset counter are part of the key, so the options and
+# the selection always belong to the category currently shown.
+dropdown_key = f"faq_dropdown_{active_category}_{st.session_state.dropdown_reset_counter}"
+
+# Search happens INSIDE the dropdown: the student clicks it and types, and the
+# native widget filters the options. filter_mode="contains" gives a
+# case-insensitive partial-text match (needs Streamlit 1.56+). On an older
+# Streamlit the keyword doesn't exist, so we fall back to the widget's own
+# default typing-search instead of crashing.
+dropdown_kwargs = dict(
+    options=dropdown_options,
+    index=None,
+    placeholder="Search or select a question...",
+    label_visibility="collapsed",
+    key=dropdown_key,
+)
+try:
+    selected_question = st.selectbox(
+        "Select a predefined question", filter_mode="contains", **dropdown_kwargs
+    )
+except TypeError:
+    selected_question = st.selectbox("Select a predefined question", **dropdown_kwargs)
+
+if st.button(
+    "Ask Question",
+    key="ask_question_btn",
+    width="stretch",
+    disabled=selected_question is None,
+):
+    st.session_state.pending_question = selected_question
+    st.session_state.dropdown_reset_counter += 1
+    st.rerun()
+
+st.caption(
+    "Type in the box above to search the questions. If nothing matches, "
+    "type your question in the chat box below."
+)
 
 st.divider()
 
@@ -254,12 +288,12 @@ with chat_container:
     for msg in st.session_state.messages:
         if msg["role"] == "user":
             st.markdown(
-                f'<div class="chat-bubble-user">{msg["text"]}</div>',
+                f'<div class="chat-bubble-user">{to_bubble_html(msg["text"])}</div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                f'<div class="chat-bubble-bot">{msg["text"]}</div>',
+                f'<div class="chat-bubble-bot">{to_bubble_html(msg["text"])}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -275,7 +309,7 @@ def submit_question(question_text: str):
     st.session_state.messages.append({"role": "bot", "text": reply})
 
 
-# Handle a question triggered by clicking an example button above.
+# Handle a question sent from the dropdown's "Ask Question" button above.
 if st.session_state.pending_question:
     submit_question(st.session_state.pending_question)
     st.session_state.pending_question = None
@@ -293,9 +327,9 @@ with st.form(key="question_form", clear_on_submit=True):
     )
     submit_col, clear_col = st.columns([3, 1])
     with submit_col:
-        send_clicked = st.form_submit_button("Send", use_container_width=True)
+        send_clicked = st.form_submit_button("Send", width="stretch")
     with clear_col:
-        clear_clicked = st.form_submit_button("New chat", use_container_width=True)
+        clear_clicked = st.form_submit_button("New chat", width="stretch")
 
 if send_clicked:
     submit_question(user_input)

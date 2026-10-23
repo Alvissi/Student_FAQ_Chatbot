@@ -1,0 +1,61 @@
+question,expected_faq_id
+Where should I begin if I want to enroll for the coming term?,ENR-01
+Walk me through the whole enrollment process from start to finish,ENR-02
+Is there a way to see whether my enrollment has been processed?,ENR-03
+What are the dates for enrolling next semester?,ENR-04
+Is it possible to change a subject I already enrolled in?,ENR-05
+"Something went wrong while I was enrolling, what can I do?",ENR-06
+Why does my enrollment say it's not complete?,ENR-07
+Is there still room in the subject I want to take?,ENR-08
+Where do I get proof that I'm officially enrolled?,ENR-09
+Who should I approach with questions about enrollment?,ENR-10
+Can students enroll through the internet?,ENR-11
+I'm an old student; how do I enroll again for the next term?,ENR-12
+"I'm entering college for the first time, how do I enroll?",ENR-13
+"I came from a different university, what is the enrollment process for me?",ENR-14
+"The enrollment period is over, can I still enroll?",ENR-15
+Which documents do I need to bring to enroll?,REQ-01
+What should first-year students submit to the school?,REQ-02
+What documents are needed by students who are re-enrolling?,REQ-03
+Which papers must students transferring from another school submit?,REQ-04
+What academic records should I request from my former school?,REQ-05
+"One of my documents isn't available yet, what should I do?",REQ-06
+What if I can't complete my requirements before the deadline?,REQ-07
+In what way do I hand in my requirements?,REQ-08
+How can I see which of my documents have been received by the school?,REQ-09
+"My name is spelled wrongly in the papers I submitted, who do I tell?",REQ-10
+How do I request a new copy of a document that I lost?,REQ-11
+Do the documents need to be original or are copies accepted?,REQ-12
+Do schools require a good moral certificate?,REQ-13
+Must I submit my PSA birth certificate?,REQ-14
+What additional documents must students from abroad provide?,REQ-15
+Where do I look up my class schedule?,SCH-01
+At what time does each of my classes start?,SCH-02
+How can I tell which room I should go to for my subject?,SCH-03
+Where do I see the subjects I've signed up for?,SCH-04
+"My class schedule has not appeared, what should I do?",SCH-05
+"I have overlapping classes in my schedule, what do I do?",SCH-06
+Can I ask to switch to another section?,SCH-07
+How do I find out if there are changes to my schedule?,SCH-08
+How do I make sure none of my subjects clash?,SCH-09
+Whom should I ask if I have a problem with my schedule?,SCH-10
+Can I save my schedule as a PDF?,SCH-11
+Can I look at my timetable using my mobile phone?,SCH-12
+When will the midterm exam dates be posted?,SCH-13
+How can I find out when my professor is available for consultation?,SCH-14
+Is the schedule I'm seeing now the official one?,SCH-15
+What is the weather like tomorrow?,NONE
+Who is the president of the Philippines?,NONE
+How do I bake a chocolate cake?,NONE
+What's the best smartphone to buy?,NONE
+Where is the nearest hospital?,NONE
+How can I improve my English speaking skills?,NONE
+Can you write a poem about the ocean?,NONE
+What are the lunch options in the canteen?,NONE
+How do I join the school basketball team?,NONE
+What is the price of gasoline today?,NONE
+Tell me about the history of the Philippines,NONE
+How do I apply for a job?,NONE
+What is 25 times 4?,NONE
+Who is the best singer in the world?,NONE
+How do I fix my bicycle tire?,NONE

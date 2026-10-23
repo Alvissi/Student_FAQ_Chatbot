@@ -1,0 +1,31 @@
+question,expected_faq_id
+Where can I find out whether my enrollment has been approved?,ENR-03
+Until when can students enroll this term?,ENR-04
+I want to drop one subject and take another,ENR-05
+"My enrollment still shows pending, what now?",ENR-07
+How can I tell if a section is already closed?,ENR-08
+What is a certificate of enrollment and how do I get it?,ENR-09
+Can I do my enrollment from home?,ENR-11
+What should an old student do to enroll for the next term?,ENR-12
+What papers do freshmen submit?,REQ-02
+Which documents are required to apply as a transferee?,REQ-04
+"I lost my report card, how do I get another one?",REQ-11
+My birth date is wrong on the form I submitted,REQ-10
+Can I turn in photocopies instead of the originals?,REQ-12
+Where can I view my timetable?,SCH-01
+Which classroom is my subject held in?,SCH-03
+My schedule isn't showing in the portal,SCH-05
+"Two classes meet at the same time, help",SCH-06
+Can I get a printout of my timetable?,SCH-11
+Where are the final exam dates posted?,SCH-13
+How do I contact my instructor for consultation?,SCH-14
+What's the weather today?,NONE
+Who won the basketball game last night?,NONE
+How do I cook fried rice?,NONE
+What time does the school cafeteria open?,NONE
+Can you recommend a laptop for programming?,NONE
+Tell me a joke,NONE
+What is the capital of France?,NONE
+How do I reset my wifi password?,NONE
+Where can I buy movie tickets?,NONE
+How do I lose weight fast?,NONE
